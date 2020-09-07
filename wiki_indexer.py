@@ -17,6 +17,9 @@ from nltk.stem.snowball import SnowballStemmer
 import time
 import resource
 
+global titleNum
+titleNum = 0
+
 class CreateStatFile():
     def __init__(self, outputdir, statfile, words):
         self.statfile = statfile
@@ -168,11 +171,6 @@ class TextProcessor():
         self.wCount.clear()
         self.wStr.clear()
 
-    # def createStat(self):
-    #     f = open(self.statfile,"a+")
-    #     f.write(str(self.iter)+" "+str(self.count)+"\n")
-    #     f.close()
-
 class MergeFiles():
     def __init__(self, outputdir, statfile, iter):
         self.outputdir = outputdir
@@ -184,12 +182,6 @@ class MergeFiles():
     def mergeIndex(self):
         self.files = glob.glob(self.outputdir+'/*-'+str(self.iter)+'.txt')
         t = self.merge("-"+str(self.iter))
-    #     self.addStat()
-
-    # def addStat(self):
-    #     f = open(self.statfile,"a+")
-    #     f.write(str(self.words))
-    #     f.close()         
 
     def extractWord(self, line, start):
         if ":" in line:
@@ -217,6 +209,9 @@ class MergeFiles():
         
         fEndCnt = 0
         indexFCnt = 0
+
+        indexfile = self.outputdir+"/INDEX.txt"
+        fIndex = open(indexfile, "w+")
         while fEndCnt < len(self.files):
             self.wStr = {}
             outputfile = self.outputdir+"/index-"+str(indexFCnt)+str(endName)+".txt"
@@ -262,11 +257,18 @@ class MergeFiles():
                 temp += "\n"
                 fOutput.write(temp)
             self.words += len(self.wStr)
+
+            startword = str(list(self.wStr.item())[0])
+            endword = str(list(self.wStr.item())[-1])
+            line = "" + startword+":"+endword+"|"+outputfile+"\n"
+            fIndex.write(line)
+
             self.wStr = {}
             fOutput.close()
             indexFCnt += 1
             print("status "+str(indexFCnt)+" "+str(self.words)+"\n")
 
+        fIndex.close()
         print("file to be deleted")
         print(self.files)
         for fle in self.files:
@@ -282,12 +284,14 @@ class MergeFiles():
 
 class WikiHandler(sax.ContentHandler):       
     def __init__(self, outputdir, statfile, iter):
+        if iter == '1':
+            titleNum = 0
         self.docID = 0
         self.outputdir = outputdir
         self.statfile = statfile
         self.iter = iter
         self.textproc = TextProcessor(self.outputdir, self.statfile, self.iter)
-        self.titletxt = open(self.outputdir+"/title.txt", "w+")
+        self.titletxt = open(self.outputdir+"/title.txt", "a+")
         self.initialize()
 
     def initialize(self):
@@ -306,26 +310,26 @@ class WikiHandler(sax.ContentHandler):
         self.currenttag = tag
 
     def endElement(self, tag):
+        global titleNum
         if tag == "page":
             self.titletxt.write(self.title+"\n")
-            self.textproc.processText(self.title, "title", self.docID)
-            self.textproc.processText(self.infobox, "infobox", self.docID)
-            self.textproc.processText(self.references, "references", self.docID)
-            self.textproc.processText(self.externallink, "externallink", self.docID)
-            self.textproc.processText(self.categories, "categories", self.docID)
+            self.textproc.processText(self.title, "title", self.docID+titleNum)
+            self.textproc.processText(self.infobox, "infobox", self.docID+titleNum)
+            self.textproc.processText(self.references, "references", self.docID+titleNum)
+            self.textproc.processText(self.externallink, "externallink", self.docID+titleNum)
+            self.textproc.processText(self.categories, "categories", self.docID+titleNum)
             self.textproc.processText(self.body, "body", self.docID)
 
             self.textproc.createIndex()
             self.initialize()
             self.docID += 1
-
-            if self.docID>10000 :
-                pass
-            # print("doc ID "+str(self.docID)+" ")       
+     
 
     def endDocument(self):
       self.textproc.writeIndex()
       self.titletxt.close()
+      global titleNum
+      titleNum += self.docID
     #   self.textproc.createStat()
     #   print("stat file created\n")
       
@@ -388,6 +392,9 @@ if __name__ == "__main__":
     print("arguments to python")
     print(sys.argv)
 
+    if sys.argv[4] == '1':
+        global titleNum
+        titleNum = 0
     if sys.argv[5] == '1':
         mergeproc = MergeFiles(sys.argv[2], sys.argv[3], sys.argv[4])
         words = mergeproc.externalMerge()
