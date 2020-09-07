@@ -17,6 +17,39 @@ from nltk.stem.snowball import SnowballStemmer
 import time
 import resource
 
+class CreateStatFile():
+    def __init__(self, outputdir, statfile, words):
+        self.statfile = statfile
+        self.outputdir = outputdir
+        self.words = words
+        self.size, self.num = self.findSizeAndNum()
+
+        self.writeStat()
+
+    def writeStat(self):
+        f = open(self.statfile, "a+")
+        f.write(self.size)
+        f.write("\n")
+        f.write(self.num)
+        f.write("\n")
+        f.write(self.words)
+        f.write("\n\n")
+        f.close()
+
+    def findSizeAndNum(self):
+        total = 0
+        num = 0
+        try:
+            for entry in os.scandir(self.outputdir):
+                if entry.is_file():
+                    total += entry.stat().st_size
+                    num += 1
+        except NotADirectoryError:
+            return os.path.getsize(self.outputdir)
+        except PermissionError:
+            return 0, 0
+        return total, num
+
 class TextProcessor():
     def __init__(self, outputdir, statfile, iter):
         self.outputdir = outputdir
@@ -29,9 +62,11 @@ class TextProcessor():
         self.stemer = Stemmer.Stemmer('english')
         # self.englishStemmer=SnowballStemmer("english")
         self.wCount = {}
+        self.storeStem = {}
         self.max = int(int(resource.getrlimit(resource.RLIMIT_NOFILE)[0])/2)
         if self.max < 1 :
             self.max = 200
+        self.stop_words = set(stopwords.words('english')) 
         self.wStr = {}
         self.curDocID = 0
         self.docID = 0
@@ -48,27 +83,31 @@ class TextProcessor():
 
     def removeStopwords(self, tokens):
         filtered_tokens = []
-        stop_words = set(stopwords.words('english')) 
         for token in tokens: 
             s = re.sub(r'[^\x00-\x7f]',r' ',token)
-            if (s == token) and token not in stop_words:
+            if (s == token) and token not in self.stop_words:
                 filtered_tokens.append(token)
         return filtered_tokens
 
     def stem(self, text):
-        storeStem = {}
+        
         stemmedWord = []
         for word in text:
-            if word not in storeStem:
+            if word not in self.storeStem:
                 # storeStem[word] = self.englishStemmer.stem(word)
-                storeStem[word] = self.stemer.stemWord(word)
-            stemmedWord.append(storeStem[word])
+                self.storeStem[word] = self.stemer.stemWord(word)
+            stemmedWord.append(self.storeStem[word])
         
-        storeStem.clear()
+        if len(self.storeStem)>1000000:
+            l = list(self.storeStem.keys())
+            m = l[0:100000]
+            for dword in m:
+                del self.storeStem[dword]
         return stemmedWord
 
     def processText(self, text, tag, docId):
         self.docID =docId
+
         textP = self.removePunctiotion(text)
         textP = textP.lower()
         textFinal = self.stem(self.removeStopwords(self.tokenize(textP)))
@@ -98,7 +137,7 @@ class TextProcessor():
             pass
 
     def createIndex(self):
-        for word in self.wCount:
+        for word in sorted(self.wCount):
             temp = ""
             temp += ("d"+str(self.docID))
             temp += ("t"+str(self.wCount[word][0]))
@@ -129,93 +168,117 @@ class TextProcessor():
         self.wCount.clear()
         self.wStr.clear()
 
-    def createStat(self):
-        f = open(self.statfile,"w+")
-        f.write(str(self.count)+"\n")
-        f.close()
+    # def createStat(self):
+    #     f = open(self.statfile,"a+")
+    #     f.write(str(self.iter)+" "+str(self.count)+"\n")
+    #     f.close()
 
 class MergeFiles():
     def __init__(self, outputdir, statfile, iter):
         self.outputdir = outputdir
         self.statfile = statfile
         self.iter = iter
-        self.outputfile = self.outputdir+"/index-"+str(self.iter)+".txt"
-
-        self.files = glob.glob(self.outputdir+'/*-'+str(self.iter)+'.txt')
-        # print(self.files)
-        # print("===============================")
         self.wStr = {}
         self.words = 0
-        while(len(self.files)>1):
-            if(len(self.files) == 2):
-                t = self.merge(self.files[0], self.files[1], True)
-                break
-            temp = []
-            for i in range(0, len(self.files), 2):
-                if i >= (len(self.files)-1):
-                    temp.append(self.files[i])
-                else:
-                    temp.append(self.merge(self.files[i], self.files[i+1], False))
-            self.files = temp
-        self.addStat()
 
-    def addStat(self):
-        f = open(self.statfile,"a+")
-        f.write(str(self.words))
-        f.close()
+    def mergeIndex(self):
+        self.files = glob.glob(self.outputdir+'/*-'+str(self.iter)+'.txt')
+        t = self.merge("-"+str(self.iter))
+    #     self.addStat()
 
-    def createDic(self, content):
-        word = ""
-        postlist = ""
-        for line in content:
-            if ":" in line:
-                postlist += line.split(':',1)[0].rsplit('|',1)[0]
-                if word not in self.wStr:
-                    self.wStr[word] = str(postlist)
-                else :
-                    self.wStr[word] += str(postlist)
-                
+    # def addStat(self):
+    #     f = open(self.statfile,"a+")
+    #     f.write(str(self.words))
+    #     f.close()         
+
+    def extractWord(self, line, start):
+        if ":" in line:
+            if start:
                 word =  line.split(':',1)[0].rsplit('|',1)[-1].strip()
-                postlist = line.split(':',1)[1].strip()     
-            else :
-                postlist += line.strip()  
-        if word not in self.wStr:
-            self.wStr[word] = str(postlist)
+                postlist = line.split(':',1)[1].strip()
+                return word, postlist, False
+            else:
+                word = ""
+                postlist = line.split(':',1)[0].rsplit('|',1)[0]
+                return word, postlist, True
         else :
-            self.wStr[word] += str(postlist)         
-
-    def merge(self, file1, file2, flag):
+            word = ""
+            postlist += line.strip()
+            return word, postlist, False
+        
+    def merge(self, endName): 
+        # -1 that will be the endName or nothing
         self.wStr = {}
-        f1 = open(file1, "r")
-        f2 = open(file2, "r")
-        self.createDic(f1.readlines())
-        self.createDic(f2.readlines())
-        f1.close()
-        f2.close()
-
-        if flag:
-            open(file1, 'w').close()
-            os.remove(file1)
-            f = open(self.outputfile, "w+")
+        self.words = 0
+        fList = []
+        for fle in self.files:
+            f = open(fle, "r")
+            fList.append(f)
+        
+        fEndCnt = 0
+        indexFCnt = 0
+        while fEndCnt < len(self.files):
+            self.wStr = {}
+            outputfile = self.outputdir+"/index-"+str(indexFCnt)+str(endName)+".txt"
+            fOutput = open(outputfile, "w+")
+            while(len(self.wStr) < 1000000):
+                endedFiles = []
+                for f in fList:
+                    fpos = f.tell()
+                    line = f.readline()
+                    if(line == ""):
+                        endedFiles.append(f)
+                        break
+                    word, postlist, t = self.extractWord(line, True)
+                    while(1):
+                        fpos = f.tell()
+                        line = f.readline()
+                        if(line == ""):
+                            endedFiles.append(f)
+                            break
+                        w, p, end = self.extractWord(line, False)
+                        word += w
+                        postlist += p
+                        if end:
+                            f.seek(fpos)
+                            break
+                    if word == "":
+                        break
+                    if word not in self.wStr:
+                        self.wStr[word] = str(postlist)
+                    else :
+                        self.wStr[word] += str(postlist)
+                for f in endedFiles:
+                    fEndCnt += 1
+                    fList.remove(f)
+                    f.close()
+                if fEndCnt >= len(self.files):
+                    break
+                #print("status inside "+str(len(self.wStr))+"\n")
             for word in sorted(self.wStr):
                 temp = str(word)
                 temp += ":"
                 temp += str(self.wStr[word])
                 temp += "\n"
-                f.write(temp)
-        else:
-            f = open(file1, "w+")
-            for word in self.wStr:
-                self.words += 1
-                temp = str(word)
-                temp += ":"
-                temp += str(self.wStr[word])
-                temp += "\n"
-                f.write(temp)       
-        f.close()
-        open(file2, 'w').close()
-        os.remove(file2)
-        return file1
+                fOutput.write(temp)
+            self.words += len(self.wStr)
+            self.wStr = {}
+            fOutput.close()
+            indexFCnt += 1
+            print("status "+str(indexFCnt)+" "+str(self.words)+"\n")
+
+        print("file to be deleted")
+        print(self.files)
+        for fle in self.files:
+            open(fle, 'w').close()
+            os.remove(fle)
+
+        return self.words
+
+    def externalMerge(self):
+        self.files = glob.glob(self.outputdir+'/index-*.txt')
+        words = self.merge("")
+        return words
 
 class WikiHandler(sax.ContentHandler):       
     def __init__(self, outputdir, statfile, iter):
@@ -224,7 +287,7 @@ class WikiHandler(sax.ContentHandler):
         self.statfile = statfile
         self.iter = iter
         self.textproc = TextProcessor(self.outputdir, self.statfile, self.iter)
-
+        self.titletxt = open(self.outputdir+"/title.txt", "w+")
         self.initialize()
 
     def initialize(self):
@@ -244,6 +307,7 @@ class WikiHandler(sax.ContentHandler):
 
     def endElement(self, tag):
         if tag == "page":
+            self.titletxt.write(self.title+"\n")
             self.textproc.processText(self.title, "title", self.docID)
             self.textproc.processText(self.infobox, "infobox", self.docID)
             self.textproc.processText(self.references, "references", self.docID)
@@ -261,10 +325,9 @@ class WikiHandler(sax.ContentHandler):
 
     def endDocument(self):
       self.textproc.writeIndex()
-      self.textproc.createStat()
-      print("stat file created\n")
-      mergeproc = MergeFiles(self.outputdir, self.statfile, self.iter)
-      print("files merged and document end\n")
+      self.titletxt.close()
+    #   self.textproc.createStat()
+    #   print("stat file created\n")
       
     def characters(self, content):
         if self.rnum > 0:
@@ -322,15 +385,29 @@ class WikiHandler(sax.ContentHandler):
                 self.infobox += content     
 
 if __name__ == "__main__":
+    print("arguments to python")
+    print(sys.argv)
+
+    if sys.argv[5] == '1':
+        mergeproc = MergeFiles(sys.argv[2], sys.argv[3], sys.argv[4])
+        words = mergeproc.externalMerge()
+        statproc = CreateStatFile(sys.argv[2], sys.argv[3],words)
+        exit(1)
+
     start_time = time.time()
 
     reader = sax.make_parser([])
-    print(sys.argv)
     handler = WikiHandler(sys.argv[2], sys.argv[3], sys.argv[4])
     reader.setContentHandler(handler)
     reader.parse(open(sys.argv[1]))
+    smerge_time = time.time()
+    mergeproc = MergeFiles(sys.argv[2], sys.argv[3], sys.argv[4])
+    mergeproc.mergeIndex()
+    print("files merged and document end: time taken "+str(time.time()-smerge_time)+"\n")
+    
     time_taken = time.time() - start_time
     print("time taken for" + str(sys.argv[4])+" : "+str(time_taken)+"\n")
-
+    
     open(sys.argv[1], 'w').close()
     os.remove(sys.argv[1])
+    
