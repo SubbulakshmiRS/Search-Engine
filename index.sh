@@ -25,7 +25,7 @@ do
     xmlFile=`find ./ -name "enwiki*"`
     echo "$xmlFile"
     python3.5 wiki_indexer.py $xmlFile $1 $2 $iter
-    if [[ "$iter" -eq 2 ]]; then
+    if [[ "$iter" -eq 1 ]]; then
         break
     fi
     iter=$((iter + 1))

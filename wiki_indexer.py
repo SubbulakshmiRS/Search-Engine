@@ -82,8 +82,11 @@ class TextProcessor():
         filtered_tokens = []
         for token in tokens: 
             s = re.sub(r'[^\x00-\x7f]',r'',token)
-            if (s == token) and token not in self.stop_words:
-                filtered_tokens.append(token)
+            if (s == token) and s not in self.stop_words:
+                s = s.lstrip('0')
+                if s == "":
+                    s = "0"
+                filtered_tokens.append(s)
         return filtered_tokens
 
     def stem(self, text):
@@ -135,6 +138,7 @@ class TextProcessor():
     def createIndex(self):
         for word in sorted(self.wCount):
             temp = ""
+            temp += ("n"+str(self.iter))
             temp += ("d"+str(self.docID))
             temp += ("t"+str(self.wCount[word][0]))
             temp += ("i"+str(self.wCount[word][1]))
@@ -169,109 +173,165 @@ class MergeFiles():
         self.outputdir = outputdir
         self.statfile = statfile
         self.iter = iter
-        self.wStr = {}
         self.words = 0
 
     def mergeIndex(self):
         self.files = glob.glob(self.outputdir+'/*-'+str(self.iter)+'.txt')
         t = self.merge("-"+str(self.iter), 0)
 
-    def extractWord(self, line, start):
+    def extractWord(self, line, start): #start - new word or not
         if ":" in line:
             if start:
                 word =  line.split(':',1)[0].rsplit('|',1)[-1].strip()
                 postlist = line.split(':',1)[1].strip()
-                return word, postlist, False
+                return word, postlist, False #still the same word in the line
             else:
                 word = ""
                 postlist = line.split(':',1)[0].rsplit('|',1)[0]
-                return word, postlist, True
+                return word, postlist, True #new word in the line
         else :
             word = ""
             postlist += line.strip()
             return word, postlist, False
         
+    def getWordPostlist(self, f): #returns word, postlist, remianing bool or not
+        if f.closed:
+            print("should not be here at all")
+            return "","", False
+        fpos = f.tell()
+        line = f.readline()
+        if(line == ""):
+            return "", "", False
+        word, postlist, t = self.extractWord(line, True)
+        while(1):
+            fpos = f.tell()
+            line = f.readline()
+            if(line == ""):
+                f.seek(fpos)
+                return word, postlist, True
+            w, p, end = self.extractWord(line, False)
+            word += w
+            postlist += p
+            if end:
+                f.seek(fpos)
+                return word, postlist, True    
+
     def merge(self, endName, finalstatus): 
+        print("inside merge index\n")
         # -1 that will be the endName or nothing
-        self.wStr = {}
         self.words = 0
-        fList = []
-        for fle in self.files:
-            f = open(fle, "r")
-            fList.append(f)
-        
-        fEndCnt = 0
-        indexFCnt = 0
+        fList = [None] * len(self.files)
+        localWStr = [None] * len(self.files)
+        endStatus = [None] * len(self.files)
+        fflag = True #ending of merging when all files have stopped reading
+        cnt = 0
 
         if finalstatus == 1:
             indexfile = self.outputdir+"/INDEX.txt"
-            fIndex = open(indexfile, "w+")
-        while fEndCnt < len(self.files):
-            self.wStr = {}
-            startword = ""
-            endword = ""
+            fIndex = open(indexfile, "a+")
+
+        for i in range(len(self.files)):
+            f = open(self.files[i], "r")
+            f.seek(0,0)
+            fList[i]=f
+            # print("inital asking for "+str(self.files[i]))
+            w, p, end = self.getWordPostlist(f)
+            localWStr[i] = [w,p]
+            if end == False:
+                # print("intial file to be closed is "+str(self.files[i]))
+                f.close()
+            else :
+                cnt += 1
+            endStatus[i] = end
+        
+        if fflag == False or cnt<=0:
+            fflag = False
+
+        # print("fflag\n")
+        # print(fflag)
+        # print("files to be tackled\n")
+        # for i in range(len(self.files)):
+        #     print(self.files[i]+" "+str(endStatus[i]))
+
+        while fflag:
+            indexFCnt = 0 #number of index- txt files
             outputfile = self.outputdir+"/index-"+str(indexFCnt)+str(endName)+".txt"
             fOutput = open(outputfile, "w+")
-            while(len(self.wStr) < 1000000):
-                endedFiles = []
-                for f in fList:
-                    fpos = f.tell()
-                    line = f.readline()
-                    if(line == ""):
-                        endedFiles.append(f)
-                        break
-                    word, postlist, t = self.extractWord(line, True)
-                    while(1):
-                        fpos = f.tell()
-                        line = f.readline()
-                        if(line == ""):
-                            endedFiles.append(f)
-                            break
-                        w, p, end = self.extractWord(line, False)
-                        word += w
-                        postlist += p
-                        if end:
-                            f.seek(fpos)
-                            break
-                    if word == "":
-                        break
-                    if word not in self.wStr:
-                        self.wStr[word] = str(postlist)
-                    else :
-                        self.wStr[word] += str(postlist)
-                for f in endedFiles:
-                    fEndCnt += 1
-                    fList.remove(f)
-                    f.close()
-                if fEndCnt >= len(self.files):
-                    break
-                #print("status inside "+str(len(self.wStr))+"\n")
-            for word in sorted(self.wStr):
-                if startword == "":
-                    startword = word
-                endword = word
-                temp = str(word)
-                temp += ":"
-                temp += str(self.wStr[word])
-                temp += "\n"
-                fOutput.write(temp)
-            self.words += len(self.wStr)
+            # print("current index/output file "+str(outputfile)+"\n")
+            self.numLines = 0
+            startword, startpostlist = "", ""
+            endword, endpostlist = "", ""
             
-            if finalstatus == 1:
-                line = "" + startword+":"+endword+"|"+outputfile+"\n"
-                fIndex.write(line)
+            tempNum = 0
+            while(self.numLines < 100000000):
+                minword, minpostlist = "", ""
+                mini = -1
+                cnt = 0
+                for i in range(len(self.files)):
+                    if fList[i].closed:
+                        endStatus[i] = False
+                    if endStatus[i] == True:
+                        cnt +=1 
+                        if minword == "":
+                            [minword, minpostlist] = localWStr[i]
+                            mini = i
 
-            self.wStr = {}
+                        else :
+                            if localWStr[i][0] < minword:
+                                [minword, minpostlist] = localWStr[i]
+
+                if fflag == False or cnt<=0:
+                    fflag = False
+                    break
+                
+                if mini>-1 and endStatus[mini]:
+                    w, p, end = self.getWordPostlist(fList[mini])
+                    localWStr[mini] = [w,p]
+                    if end == False:
+                        # print("file to be closed "+str(self.files[mini]))
+                        f.close()
+                    endStatus[mini] = end
+
+                if startword == "":
+                    startword = minword
+                    startpostlist = minpostlist
+                    endword = minword
+                    endpostlist = minpostlist
+                else :
+                    if endword < minword:
+                        temp = str(endword)+":"+str(endpostlist)+"\n"
+                        self.numLines += 1
+                        self.words += 1
+                        fOutput.write(temp)
+                        self.numLines += 1
+                        self.words += 1
+                        endword = minword
+                        endpostlist = minpostlist
+                    elif endword == minword:
+                        endpostlist += minpostlist
+                    else:
+                        print("\n\nERROR SHOULD NOT HAPPEN IN MERGE\n\n")
+
+            if endword != "":
+                temp = str(endword)+":"+str(endpostlist)+"\n"
+                self.numLines+=1
+                # print("new word\n")
+                self.words+=1
+                fOutput.write(temp)            
             fOutput.close()
+            self.numLines = 0
             indexFCnt += 1
-            print("status "+str(indexFCnt)+" "+str(self.words)+"\n")
 
+            if finalstatus == 1:
+                temp = "" + startword+":"+endword+"|"+outputfile+"\n"
+                fIndex.write(temp)
+            
         if finalstatus == 1:
             fIndex.close()
 
-        for fle in self.files:
-            open(fle, 'w').close()
-            os.remove(fle)
+        # for fle in self.files:
+        #     open(fle, 'w').close()
+        #     os.remove(fle)
 
         return self.words
 
@@ -281,14 +341,13 @@ class MergeFiles():
         return words
 
 class WikiHandler(sax.ContentHandler):       
-    def __init__(self, outputdir, statfile, iter, titleNum):
+    def __init__(self, outputdir, statfile, iter):
         self.docID = 0
         self.outputdir = outputdir
         self.statfile = statfile
         self.iter = iter
-        self.titleNum = int(titleNum)
         self.textproc = TextProcessor(self.outputdir, self.statfile, self.iter)
-        self.titletxt = open(self.outputdir+"/title.txt", "a+")
+        self.titletxt = open(self.outputdir+"/"+str(self.iter)+"-title.txt", "w+")
         self.initialize()
 
     def initialize(self):
@@ -309,12 +368,12 @@ class WikiHandler(sax.ContentHandler):
     def endElement(self, tag):
         if tag == "page":
             self.titletxt.write(self.title.lower())
-            self.textproc.processText(self.title, "title", self.docID+self.titleNum)
-            self.textproc.processText(self.infobox, "infobox", self.docID+self.titleNum)
-            self.textproc.processText(self.references, "references", self.docID+self.titleNum)
-            self.textproc.processText(self.externallink, "externallink", self.docID+self.titleNum)
-            self.textproc.processText(self.categories, "categories", self.docID+self.titleNum)
-            self.textproc.processText(self.body, "body", self.docID+self.titleNum)
+            self.textproc.processText(self.title, "title", self.docID)
+            self.textproc.processText(self.infobox, "infobox", self.docID)
+            self.textproc.processText(self.references, "references", self.docID)
+            self.textproc.processText(self.externallink, "externallink", self.docID)
+            self.textproc.processText(self.categories, "categories", self.docID)
+            self.textproc.processText(self.body, "body", self.docID)
 
             self.textproc.createIndex()
             self.initialize()
@@ -324,7 +383,6 @@ class WikiHandler(sax.ContentHandler):
     def endDocument(self):
       self.textproc.writeIndex()
       self.titletxt.close()
-      self.titleNum += self.docID
     #   self.textproc.createStat()
     #   print("stat file created\n")
       
@@ -395,9 +453,8 @@ if __name__ == "__main__":
 
     start_time = time.time()
 
-    print("titlenum at the start "+str(sys.argv[6])+"\n")
     reader = sax.make_parser([])
-    handler = WikiHandler(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[6])
+    handler = WikiHandler(sys.argv[2], sys.argv[3], sys.argv[4])
     reader.setContentHandler(handler)
     reader.parse(open(sys.argv[1]))
     smerge_time = time.time()
@@ -405,12 +462,11 @@ if __name__ == "__main__":
     mergeproc.mergeIndex()
 
     print("files merged and document end: time taken "+str(time.time()-smerge_time)+"\n")
-    print("title num at the end "+str(handler.titleNum)+"\n")
+    print("title num at the end "+str(handler.docID)+"\n")
 
     time_taken = time.time() - start_time
     print("time taken for" + str(sys.argv[4])+" : "+str(time_taken)+"\n")
     
-    open(sys.argv[1], 'w').close()
-    os.remove(sys.argv[1])
-    sys.exit(handler.titleNum)
+    # open(sys.argv[1], 'w').close()
+    # os.remove(sys.argv[1])
     

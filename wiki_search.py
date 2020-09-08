@@ -28,9 +28,12 @@ class TextProcessor():
     def removeStopwords(self, tokens):
         filtered_tokens = []
         for token in tokens: 
-            s = re.sub(r'[^\x00-\x7f]',r' ',token)
-            if (s == token) and token not in self.stop_words:
-                filtered_tokens.append(token)
+            s = re.sub(r'[^\x00-\x7f]',r'',token)
+            if (s == token) and s not in self.stop_words:
+                s = s.lstrip('0')
+                if s == "":
+                    s = "0"
+                filtered_tokens.append(s)
         return filtered_tokens
 
     def stem(self, text):
@@ -62,11 +65,13 @@ class TextProcessor():
         return tokenFinal
 
 class Search():
-    def __init__(self, outputdir):
+    def __init__(self, outputdir, queryopfile):
+        self.queryopfile = queryopfile
         self.outputdir = outputdir
         self.k = 0
         self.searchPostList={}
         self.titlesNet = []
+        self.title_docID = {} #contains the list of [titlenum, docID], whose key will be correlated to docScore key
         self.docScore = {}
         self.weights = [2,1,1,1,1,1]
         self.types = ["t", "i", "c", "b","r","l"]
@@ -75,10 +80,12 @@ class Search():
         self.getTitles()
 
     def getTitles(self):
-        titlefile = str(self.outputdir + "/title.txt")
-        f = open(titlefile,"r")
-        self.titlesNet = f.readlines()
-        f.close()
+        titlefiles = glob.glob(self.outputdir+'/*-title.txt')
+        for t in sorted(titlefiles):
+            f = open(t,"r")
+            titles = f.readlines()
+            f.close()
+            self.titlesNet.append(titles)
 
     def findIndexFile(self, word):
         self.indexfile = str(self.outputdir+"/INDEX.txt")
@@ -141,7 +148,7 @@ class Search():
 
     def extractOccurences(self, postlist, tag):
         posts = postlist.split("|")
-        compare = "d(\d+)"
+        compare = "n(\d+)d(\d+)"
         occ = {}
         for char in self.types:
             compare += char+"(\d+)"
@@ -150,16 +157,29 @@ class Search():
             c = re.compile(compare)
             s = c.search(post)
             if s:
-                docID = int(s.group(1))
+                titleNum = int(s.group(1))
+                docID = int(s.group(2))
                 pos = int(self.types.index(tag))
                 if int(s.group(1+pos)) > 0:
                     if docID not in occ:
                         occ[docID] = 0
                     for i in range(6):
                         if i == pos:
-                            occ[docID] += 2*int(s.group(i+2))*self.weights[i]
+                            if [titleNum, docID] in self.title_docID.values():
+                                key = self.title_docID.keys()[self.title_docID.values().index([titleNum, docID])]
+                                occ[key] += 2*int(s.group(i+2))*self.weights[i]
+                            else :
+                                key = len(self.title_docID)
+                                self.title_docID[key] = [titleNum, docID]
+                                occ[key] += 2*int(s.group(i+2))*self.weights[i]
                         else :
-                            occ[docID] += int(s.group(i+2))*self.weights[i]
+                            if [titleNum, docID] in self.title_docID.values():
+                                key = self.title_docID.keys()[self.title_docID.values().index([titleNum, docID])]
+                                occ[key] += int(s.group(i+2))*self.weights[i]
+                            else :
+                                key = len(self.title_docID)
+                                self.title_docID[key] = [titleNum, docID]
+                                occ[key] += int(s.group(i+2))*self.weights[i]
         return occ
                     
     def processQuery(self, query):
@@ -194,7 +214,7 @@ class Search():
 
             for word in lst:
                 outputfile = self.findIndexFile(word)
-                #scores are of form {docID:[addition of dot product of vector of size 6 and its weights]}
+                #scores are of form {key:[addition of dot product of vector of size 6 and its weights]} and key goes to a pair [titleNum, docID]
                 scores = self.searchOutputFile(outputfile, word, tag)
                 common_keys.intersection_update(set(scores.keys()))
                 for key in self.docScore:
@@ -203,31 +223,40 @@ class Search():
                     else :
                         del self.docScore[key]
 
-        print("the complete interference match for all words and tags\n")
-        print(self.docScore)
-        print("===============================================")
-        print("the top k")
+        f = open(self.searchOutputFile, "a+")
         i = 0
         for key in sorted(self.docScore.items(), key=operator.itemgetter(1), reverse=True):
-            print(str(key)+" , "+self.titlesNet[key])
+            [titleNum, docID] = self.title_docID[key]
+            temp = str(titleNum)+" , "+str(docID)+" , "+str(self.titlesNet[titleNum][docID])+"\n"
+            f.write(temp)
+            print(str(key)+" , "+self.titlesNet[titleNum][docID])
             i += 1
             if i >= self.k:
                 break
+        f.write("\n")
+        f.close()
         
 
 if __name__ == "__main__":
     start_time = time.time()
-    searchproc = Search(sys.argv[1])
+    searchproc = Search(sys.argv[1], sys.argv[3])
 
     f = open(sys.argv[2],"r")
     line = f.readline()
+    n = 0
     while line:
+        n += 1
         startt = time.time()
         searchproc.processQuery(line)
-        searchproc.searchQuery()
+        # searchproc.searchQuery()
         tt = time.time()-startt
         print("time taken for this search: "+str(tt)+"\n")
         line = f.readline()
 
     time_taken = time.time() - start_time
     print("time taken for compelete searching: "+str(time_taken)+"\n")
+
+    f = open(sys.argv[3],"a+")
+    temp = str(float(time_taken/n))+" , "+str(time_taken)+"\n"
+    f.write(temp)
+    f.close()
