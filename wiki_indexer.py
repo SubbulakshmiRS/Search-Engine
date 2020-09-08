@@ -17,9 +17,6 @@ from nltk.stem.snowball import SnowballStemmer
 import time
 import resource
 
-global titleNum
-titleNum = 0
-
 class CreateStatFile():
     def __init__(self, outputdir, statfile, words):
         self.statfile = statfile
@@ -31,12 +28,9 @@ class CreateStatFile():
 
     def writeStat(self):
         f = open(self.statfile, "a+")
-        f.write(self.size)
-        f.write("\n")
-        f.write(self.num)
-        f.write("\n")
-        f.write(self.words)
-        f.write("\n\n")
+        f.write(str(self.size)+"\n")
+        f.write(str(self.num)+"\n")
+        f.write(str(self.words)+"\n\n")
         f.close()
 
     def findSizeAndNum(self):
@@ -48,7 +42,7 @@ class CreateStatFile():
                     total += entry.stat().st_size
                     num += 1
         except NotADirectoryError:
-            return os.path.getsize(self.outputdir)
+            return os.path.getsize(self.outputdir), 0
         except PermissionError:
             return 0, 0
         return total, num
@@ -75,7 +69,7 @@ class TextProcessor():
         self.docID = 0
         self.count = 0
 
-    def removePunctiotion(self, text):
+    def removePunctuation(self, text):
         res = re.sub(r'[^\w\s]', ' ', text)
         return res
 
@@ -87,13 +81,12 @@ class TextProcessor():
     def removeStopwords(self, tokens):
         filtered_tokens = []
         for token in tokens: 
-            s = re.sub(r'[^\x00-\x7f]',r' ',token)
+            s = re.sub(r'[^\x00-\x7f]',r'',token)
             if (s == token) and token not in self.stop_words:
                 filtered_tokens.append(token)
         return filtered_tokens
 
     def stem(self, text):
-        
         stemmedWord = []
         for word in text:
             if word not in self.storeStem:
@@ -110,12 +103,12 @@ class TextProcessor():
 
     def processText(self, text, tag, docId):
         self.docID =docId
-
-        textP = self.removePunctiotion(text)
+        textP = self.removePunctuation(text)
         textP = textP.lower()
         textFinal = self.stem(self.removeStopwords(self.tokenize(textP)))
         for word in textFinal:
-            if word.strip() == '':
+            word = word.strip()
+            if word == '':
                 continue
             self.count += 1
             if word not in self.wCount:
@@ -160,7 +153,7 @@ class TextProcessor():
 
     def writeIndex(self):
         f = open(self.outputdir + "/"+ str(self.curDocID)+"-"+ str(self.iter)+".txt","w+")
-        for word in self.wStr:
+        for word in sorted(self.wStr):
             temp = str(word)
             temp += ":"
             temp += str(self.wStr[word])
@@ -181,7 +174,7 @@ class MergeFiles():
 
     def mergeIndex(self):
         self.files = glob.glob(self.outputdir+'/*-'+str(self.iter)+'.txt')
-        t = self.merge("-"+str(self.iter))
+        t = self.merge("-"+str(self.iter), 0)
 
     def extractWord(self, line, start):
         if ":" in line:
@@ -198,7 +191,7 @@ class MergeFiles():
             postlist += line.strip()
             return word, postlist, False
         
-    def merge(self, endName): 
+    def merge(self, endName, finalstatus): 
         # -1 that will be the endName or nothing
         self.wStr = {}
         self.words = 0
@@ -210,10 +203,13 @@ class MergeFiles():
         fEndCnt = 0
         indexFCnt = 0
 
-        indexfile = self.outputdir+"/INDEX.txt"
-        fIndex = open(indexfile, "w+")
+        if finalstatus == 1:
+            indexfile = self.outputdir+"/INDEX.txt"
+            fIndex = open(indexfile, "w+")
         while fEndCnt < len(self.files):
             self.wStr = {}
+            startword = ""
+            endword = ""
             outputfile = self.outputdir+"/index-"+str(indexFCnt)+str(endName)+".txt"
             fOutput = open(outputfile, "w+")
             while(len(self.wStr) < 1000000):
@@ -251,26 +247,28 @@ class MergeFiles():
                     break
                 #print("status inside "+str(len(self.wStr))+"\n")
             for word in sorted(self.wStr):
+                if startword == "":
+                    startword = word
+                endword = word
                 temp = str(word)
                 temp += ":"
                 temp += str(self.wStr[word])
                 temp += "\n"
                 fOutput.write(temp)
             self.words += len(self.wStr)
-
-            startword = str(list(self.wStr.item())[0])
-            endword = str(list(self.wStr.item())[-1])
-            line = "" + startword+":"+endword+"|"+outputfile+"\n"
-            fIndex.write(line)
+            
+            if finalstatus == 1:
+                line = "" + startword+":"+endword+"|"+outputfile+"\n"
+                fIndex.write(line)
 
             self.wStr = {}
             fOutput.close()
             indexFCnt += 1
             print("status "+str(indexFCnt)+" "+str(self.words)+"\n")
 
-        fIndex.close()
-        print("file to be deleted")
-        print(self.files)
+        if finalstatus == 1:
+            fIndex.close()
+
         for fle in self.files:
             open(fle, 'w').close()
             os.remove(fle)
@@ -279,17 +277,16 @@ class MergeFiles():
 
     def externalMerge(self):
         self.files = glob.glob(self.outputdir+'/index-*.txt')
-        words = self.merge("")
+        words = self.merge("", 1)
         return words
 
 class WikiHandler(sax.ContentHandler):       
-    def __init__(self, outputdir, statfile, iter):
-        if iter == '1':
-            titleNum = 0
+    def __init__(self, outputdir, statfile, iter, titleNum):
         self.docID = 0
         self.outputdir = outputdir
         self.statfile = statfile
         self.iter = iter
+        self.titleNum = int(titleNum)
         self.textproc = TextProcessor(self.outputdir, self.statfile, self.iter)
         self.titletxt = open(self.outputdir+"/title.txt", "a+")
         self.initialize()
@@ -310,15 +307,14 @@ class WikiHandler(sax.ContentHandler):
         self.currenttag = tag
 
     def endElement(self, tag):
-        global titleNum
         if tag == "page":
-            self.titletxt.write(self.title+"\n")
-            self.textproc.processText(self.title, "title", self.docID+titleNum)
-            self.textproc.processText(self.infobox, "infobox", self.docID+titleNum)
-            self.textproc.processText(self.references, "references", self.docID+titleNum)
-            self.textproc.processText(self.externallink, "externallink", self.docID+titleNum)
-            self.textproc.processText(self.categories, "categories", self.docID+titleNum)
-            self.textproc.processText(self.body, "body", self.docID)
+            self.titletxt.write(self.title.lower())
+            self.textproc.processText(self.title, "title", self.docID+self.titleNum)
+            self.textproc.processText(self.infobox, "infobox", self.docID+self.titleNum)
+            self.textproc.processText(self.references, "references", self.docID+self.titleNum)
+            self.textproc.processText(self.externallink, "externallink", self.docID+self.titleNum)
+            self.textproc.processText(self.categories, "categories", self.docID+self.titleNum)
+            self.textproc.processText(self.body, "body", self.docID+self.titleNum)
 
             self.textproc.createIndex()
             self.initialize()
@@ -328,8 +324,7 @@ class WikiHandler(sax.ContentHandler):
     def endDocument(self):
       self.textproc.writeIndex()
       self.titletxt.close()
-      global titleNum
-      titleNum += self.docID
+      self.titleNum += self.docID
     #   self.textproc.createStat()
     #   print("stat file created\n")
       
@@ -392,9 +387,6 @@ if __name__ == "__main__":
     print("arguments to python")
     print(sys.argv)
 
-    if sys.argv[4] == '1':
-        global titleNum
-        titleNum = 0
     if sys.argv[5] == '1':
         mergeproc = MergeFiles(sys.argv[2], sys.argv[3], sys.argv[4])
         words = mergeproc.externalMerge()
@@ -403,18 +395,22 @@ if __name__ == "__main__":
 
     start_time = time.time()
 
+    print("titlenum at the start "+str(sys.argv[6])+"\n")
     reader = sax.make_parser([])
-    handler = WikiHandler(sys.argv[2], sys.argv[3], sys.argv[4])
+    handler = WikiHandler(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[6])
     reader.setContentHandler(handler)
     reader.parse(open(sys.argv[1]))
     smerge_time = time.time()
     mergeproc = MergeFiles(sys.argv[2], sys.argv[3], sys.argv[4])
     mergeproc.mergeIndex()
+
     print("files merged and document end: time taken "+str(time.time()-smerge_time)+"\n")
-    
+    print("title num at the end "+str(handler.titleNum)+"\n")
+
     time_taken = time.time() - start_time
     print("time taken for" + str(sys.argv[4])+" : "+str(time_taken)+"\n")
     
     open(sys.argv[1], 'w').close()
     os.remove(sys.argv[1])
+    sys.exit(handler.titleNum)
     

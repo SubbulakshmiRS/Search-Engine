@@ -5,4 +5,6 @@ if [[ "$#" -ne 2 ]]; then
     exit 1
 fi
 
+#1 -  outputdir for the indexes
+#2 - query.txt
 python3.5 wiki_search.py $1 $2
